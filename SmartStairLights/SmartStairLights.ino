@@ -1,63 +1,63 @@
 #include <FastLED.h>
 #include <Ultrasonic.h>
 
-#define LED_TYPE WS2812
-#define COLOR_ORDER GRB
-#define LED_PIN D4                // пин для светодиодной ленты
-#define NUM_LEDS 1190             // количество светодиодов
-#define BRIGHTNESS 210            // яркость светодиода
-#define BRIGHTNESS_FOR_WHITE 107  // яркость для белого цвета
-#define MIN_BRIGHTNESS 40         // яркость первого и последнего ступени
+#define LED_TYPE WS2812               // тип используемых светодиодов (WS2812B)
+#define COLOR_ORDER GRB               // порядок цветов (зеленый, красный, синий)
+#define LED_PIN D4                    // пин для подключения светодиодной ленты
+#define NUM_LEDS 1190                 // общее количество светодиодов в ленте
+#define BRIGHTNESS 210                // максимальная яркость светодиодов (0-255)
+#define BRIGHTNESS_FOR_WHITE 107      // яркость для белого цвета (ограниченная для экономии мощности)
+#define EDGE_BRIGHTNESS 40            // минимальная яркость для первого и последнего ступени
 
-#define TRIG_PIN_BOTTOM D5
-#define ECHO_PIN_BOTTOM D6
-#define TRIG_PIN_TOP D7
-#define ECHO_PIN_TOP D8
+#define TRIG_PIN_BOTTOM D5            // триггерный пин для нижнего ультразвукового датчика
+#define ECHO_PIN_BOTTOM D6            // эхо-пин для нижнего ультразвукового датчика
+#define TRIG_PIN_TOP D7               // триггерный пин для верхнего ультразвукового датчика
+#define ECHO_PIN_TOP D8               // эхо-пин для верхнего ультразвукового датчика
 
-#define NUM_STEPS 17 // количество ступеней
-#define LEDS_PER_STEP (NUM_LEDS / NUM_STEPS) // количество светодиодов на одном ступени 
+#define NUM_STEPS 17                  // количество ступеней на лестнице
+#define LEDS_PER_STEP (NUM_LEDS / NUM_STEPS) // количество светодиодов на одну ступень
 
-#define BUTTON_PIN D1  // пин для переключения цветов палитры
-#define BUTTON_PIN_FOR_MODE D3  // пин для переключения режимов
-#define DEBOUNCE_DELAY 250 // задержка дебаунса
+#define BUTTON_PIN D1                 // пин для кнопки переключения палитры цветов
+#define BUTTON_PIN_FOR_MODE D3        // пин для кнопки переключения режимов работы
+#define DEBOUNCE_DELAY 250            // задержка для защиты от дребезга кнопки (в миллисекундах)
 
-#define FADE_IN_STEPS_ON 6 // значения для плавного включения  
-#define FADE_OUT_STEPS_OFF 6 // значения для плавного выключения  
-#define FADE_DELAY_ON 2 // задержка включение между ступеней       
-#define FADE_DELAY_OFF 2 // задержка выключение между ступеней  
+#define FADE_IN_STEPS_ON 6            // количество шагов для плавного включения светодиодов
+#define FADE_OUT_STEPS_OFF 6          // количество шагов для плавного выключения светодиодов
+#define FADE_DELAY_ON 2               // задержка между шагами для включения (в миллисекундах)
+#define FADE_DELAY_OFF 2              // задержка между шагами для выключения (в миллисекундах)
 
-Ultrasonic ultrasonicBottom(TRIG_PIN_BOTTOM, ECHO_PIN_BOTTOM);
-Ultrasonic ultrasonicTop(TRIG_PIN_TOP, ECHO_PIN_TOP);
+Ultrasonic ultrasonicBottom(TRIG_PIN_BOTTOM, ECHO_PIN_BOTTOM);  // нижний ультразвуковой датчик
+Ultrasonic ultrasonicTop(TRIG_PIN_TOP, ECHO_PIN_TOP);           // верхний ультразвуковой датчик
 
-CRGB leds[NUM_LEDS];
-enum LedState {OFF, ON, DIMMED};
-LedState ledState[NUM_LEDS];
+CRGB leds[NUM_LEDS];               // массив для управления каждым светодиодом
+enum LedState {OFF, ON, DIMMED};   // состояния светодиодов: выкл, вкл, затемнено
+LedState ledState[NUM_LEDS];       // массив для хранения состояния каждого светодиода
 
-enum AnimationState { IDLE, ANIMATING, HOLDING, TURNING_OFF };
-AnimationState currentState = IDLE;
+enum AnimationState { IDLE, ANIMATING, HOLDING, TURNING_OFF };  // состояния анимации: в ожидании, анимация, удержание, выключение
+AnimationState currentState = IDLE;  // текущее состояние анимации (по умолчанию ожидание)
 
-CRGBPalette16 currentPalette;
-TBlendType currentBlending = LINEARBLEND;
-uint8_t startIndex = 0;  // индекс для движения по палитре
+CRGBPalette16 currentPalette;       // текущая палитра цветов
+TBlendType currentBlending = LINEARBLEND; // тип смешивания цветов (линейное смешивание)
+uint8_t startIndex = 0;             // индекс для сдвига палитры (используется для "движения" цветов)
 
-bool motionDetectedBottom = false;  
-bool motionDetectedTop = false;
-bool bottomToTop = true;
+bool motionDetectedBottom = false;  // флаг обнаружения движения внизу
+bool motionDetectedTop = false;     // флаг обнаружения движения наверху
+bool bottomToTop = true;            // направление движения анимации (снизу вверх)
 
-const int DISTANCE_THRESHOLD = 105; 
+const int DISTANCE_THRESHOLD = 105; // пороговое расстояние для срабатывания датчиков движения (в сантиметрах)
 
-uint8_t currentMode = 0;
-uint8_t currentOperation = 0;
+uint8_t currentMode = 0;            // текущий режим работы светодиодов (например, режим палитры)
+uint8_t currentOperation = 0;       // текущий режим работы анимации (например, разные временные настройки)
 
-unsigned long lastButtonPressTime = 0;
-unsigned long lastButtonPressForModeTime = 0;
-unsigned long lastMotionTime = 0;
-unsigned long delayBeforeTurnOff = 0;             // секунд свечивания после включения всех светодиодов
-unsigned long holdTime = 0;                       // Время, в течение которого свет остается включенным после обнаружения движения
-const unsigned long delayBeforeTurnOff_0 = 7000;  // для первого режима (currentOperation == 0)
-const unsigned long holdTime_0 = 7000;            // для первого режима (currentOperation == 0)
-const unsigned long delayBeforeTurnOff_1 = 10000; // для второго режима (currentOperation == 1)
-const unsigned long holdTime_1 = 4000;            // для второго режима (currentOperation == 1)
+unsigned long lastButtonPressTime = 0;            // время последнего нажатия на кнопку смены палитры
+unsigned long lastButtonPressForModeTime = 0;     // время последнего нажатия на кнопку смены режимов
+unsigned long lastMotionTime = 0;                 // время последнего обнаруженного движения
+unsigned long delayBeforeTurnOff = 0;             // время, которое светодиоды будут гореть перед выключением
+unsigned long holdTime = 0;                       // время, на которое свет остаётся включенным после срабатывания датчика
+const unsigned long delayBeforeTurnOff_0 = 7000;  // время свечения для первого режима (в миллисекундах)
+const unsigned long holdTime_0 = 7000;            // время удержания для первого режима (в миллисекундах)
+const unsigned long delayBeforeTurnOff_1 = 10000; // время свечения для второго режима (в миллисекундах)
+const unsigned long holdTime_1 = 4000;            // время удержания для второго режима (в миллисекундах)
 
 void setup() {
   delay(2000);
@@ -187,9 +187,9 @@ void setFirstAndLastStepToMinimumBrightness() {
   for (int i = 0; i < LEDS_PER_STEP; i++) {
     leds[i] = CRGB::White;
     if (currentOperation == 1) {
-      FastLED.setBrightness(MIN_BRIGHTNESS);
+      FastLED.setBrightness(EDGE_BRIGHTNESS);
     } else {
-      leds[i].nscale8_video(MIN_BRIGHTNESS); 
+      leds[i].nscale8_video(EDGE_BRIGHTNESS); 
     }
   }
 
@@ -197,9 +197,9 @@ void setFirstAndLastStepToMinimumBrightness() {
   for (int i = NUM_LEDS - LEDS_PER_STEP; i < NUM_LEDS; i++) {
     leds[i] = CRGB::White;
     if (currentOperation == 1) {
-      FastLED.setBrightness(MIN_BRIGHTNESS);
+      FastLED.setBrightness(EDGE_BRIGHTNESS);
     } else {
-      leds[i].nscale8_video(MIN_BRIGHTNESS); 
+      leds[i].nscale8_video(EDGE_BRIGHTNESS); 
     }
   }
 
