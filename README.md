@@ -88,4 +88,4 @@
 
 ## Результаты
 
-![Result](schematic/result.png)
+![Result](schematics/result.png)
