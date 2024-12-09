@@ -5,9 +5,9 @@
 #define COLOR_ORDER GRB               // порядок цветов (зеленый, красный, синий)
 #define LED_PIN D4                    // пин для подключения светодиодной ленты
 #define NUM_LEDS 1190                 // общее количество светодиодов в ленте
-#define BRIGHTNESS 210                // максимальная яркость светодиодов (0-255)
-#define BRIGHTNESS_FOR_WHITE 107      // яркость для белого цвета (ограниченная для экономии мощности)
-#define EDGE_BRIGHTNESS 40            // минимальная яркость для первого и последнего ступени
+#define MAX_BRIGHTNESS 210            // максимальная яркость светодиодов (0-255)
+#define WHITE_COLOR_BRIGHTNESS  107   // яркость для белого цвета (ограниченная для экономии мощности)
+#define EDGE_BRIGHTNESS 25            // минимальная яркость для первого и последнего ступени
 
 #define TRIG_PIN_BOTTOM D5            // триггерный пин для нижнего ультразвукового датчика
 #define ECHO_PIN_BOTTOM D6            // эхо-пин для нижнего ультразвукового датчика
@@ -17,8 +17,8 @@
 #define NUM_STEPS 17                  // количество ступеней на лестнице
 #define LEDS_PER_STEP (NUM_LEDS / NUM_STEPS) // количество светодиодов на одну ступень
 
-#define BUTTON_PIN D1                 // пин для кнопки переключения палитры цветов
-#define BUTTON_PIN_FOR_MODE D3        // пин для кнопки переключения режимов работы
+#define COLOR_BUTTON_PIN D1           // пин для кнопки переключения палитры цветов
+#define MODE_BUTTON_PIN D3            // пин для кнопки переключения режимов работы
 #define DEBOUNCE_DELAY 250            // задержка для защиты от дребезга кнопки (в миллисекундах)
 
 #define FADE_IN_STEPS_ON 6            // количество шагов для плавного включения светодиодов
@@ -62,18 +62,15 @@ const unsigned long holdTime_1 = 4000;            // время удержани
 void setup() {
   delay(2000);
   FastLED.addLeds<LED_TYPE, LED_PIN, COLOR_ORDER>(leds, NUM_LEDS).setCorrection(TypicalLEDStrip);
-  FastLED.setBrightness(BRIGHTNESS);
-  pinMode(BUTTON_PIN, INPUT_PULLUP);
-  pinMode(BUTTON_PIN_FOR_MODE, INPUT_PULLUP);
+  FastLED.setBrightness(MAX_BRIGHTNESS);
+  pinMode(COLOR_BUTTON_PIN, INPUT_PULLUP);
+  pinMode(MODE_BUTTON_PIN, INPUT_PULLUP);
 
   currentPalette = RainbowColors_p;  // Начнем с радужного режима
 
   for (int i = 0; i < NUM_LEDS; i++) {
     leds[i] = CRGB::Black;
   }
-
-  Serial.begin(115200);
-  Serial.println("System Initialized");
 }
 
 void loop() {
@@ -132,10 +129,10 @@ void loop() {
         if (currentOperation == 0) {
           if (motionDetectedBottom) {
             bottomToTop = true;
-            animateStairsToTop();
+            animateStairsOn(true);
           } else {
             bottomToTop = false;
-            animateStairsToBottom();
+            animateStairsOn(false);
           }
         } else if (currentOperation == 1) {
           if (motionDetectedBottom || motionDetectedTop) {
@@ -179,6 +176,11 @@ DEFINE_GRADIENT_PALETTE(white_palette) {
   255, 255, 255, 255   // Белый
 };
 
+DEFINE_GRADIENT_PALETTE(warm_white_palette) {
+  0,   255, 150, 0,  // Теплый белый
+  255, 255, 150, 0   // Теплый белый
+};
+
 void setFirstAndLastStepToMinimumBrightness() {
   // Очищаем все светодиоды перед тем, как установить первые и последние
   FastLED.clear();
@@ -219,10 +221,6 @@ bool detectMotion(Ultrasonic &sensor) {
   // Находим максимальное значение первого измерения
   int maxDistance1 = max(distance1_1, max(distance1_2, distance1_3));
 
-  // Вывод для отладки
-  Serial.print("Max distance (first check): ");
-  Serial.println(maxDistance1);
-
   // Если максимальное значение первого измерения меньше порога, делаем вторую проверку
   if (maxDistance1 < DISTANCE_THRESHOLD) {
     // Второе измерение
@@ -235,10 +233,6 @@ bool detectMotion(Ultrasonic &sensor) {
     // Находим максимальное значение второго измерения
     int maxDistance2 = max(distance2_1, max(distance2_2, distance2_3));
 
-    // Вывод для отладки
-    Serial.print("Max distance (second check): ");
-    Serial.println(maxDistance2);
-
     // Если и второе измерение меньше порога, делаем третью проверку
     if (maxDistance2 < DISTANCE_THRESHOLD) {
       // Третье измерение
@@ -248,10 +242,6 @@ bool detectMotion(Ultrasonic &sensor) {
 
       // Находим максимальное значение третьего измерения
       int maxDistance3 = max(distance3_1, distance3_2);
-
-      // Вывод для отладки
-      Serial.print("Max distance (third check): ");
-      Serial.println(maxDistance3);
       
       // Если все 3 измерения показывают меньше порогового значения, считаем, что сработало движение
       if (maxDistance3 < DISTANCE_THRESHOLD) {
@@ -267,53 +257,56 @@ bool detectMotion(Ultrasonic &sensor) {
 // Функция для получения максимальной яркости белого цвета и палитры CloudColors_p
 int getMaxBrightness() {
   if (currentPalette == white_palette) {
-    return BRIGHTNESS_FOR_WHITE;  // Яркость для белого
+    return WHITE_COLOR_BRIGHTNESS;  // Яркость для белого
   } else if (currentPalette == CloudColors_p) {
-    return 160;  // Яркость для облачных цветов (CloudColors_p)
+    return 200;  // Яркость для облачных цветов (CloudColors_p = 160 для 150Вт)
   } else {
-    return BRIGHTNESS;  // Яркость для остальных палитр
+    return MAX_BRIGHTNESS;  // Яркость для остальных палитр
   }
 }
 
 // Обработка нажатия кнопки
 void handleButtonPress() {
-  if (digitalRead(BUTTON_PIN) == LOW && (millis() - lastButtonPressTime) > DEBOUNCE_DELAY) {
+  if (digitalRead(COLOR_BUTTON_PIN) == LOW && (millis() - lastButtonPressTime) > DEBOUNCE_DELAY) {
     lastButtonPressTime = millis();
-    currentMode = (currentMode + 1) % 7;  // Переключаем режимы
+    currentMode = (currentMode + 1) % 8;  // Переключаем режимы
 
     switch (currentMode) {
       case 0:
         currentPalette = RainbowColors_p;
-        Serial.println("Mode 0: Rainbow Colors");
+        // Serial.println("Mode 0: Rainbow Colors");
         break;
       case 1:
         currentPalette = RainbowStripeColors_p;
-        Serial.println("Mode 1: Rainbow Stripe Colors");
+        // Serial.println("Mode 1: Rainbow Stripe Colors");
         break;
       case 2:
         currentPalette = CloudColors_p;
-        Serial.println("Mode 4: Cloud Colors");
+        // Serial.println("Mode 4: Cloud Colors");
         break;
       case 3:
         currentPalette = PartyColors_p;
-        Serial.println("Mode 2: Party Colors");
+        // Serial.println("Mode 2: Party Colors");
         break;
       case 4:
         currentPalette = OceanColors_p;
-        Serial.println("Mode 3: Ocean Colors");
+        // Serial.println("Mode 3: Ocean Colors");
         break;
       case 5:
         currentPalette = blue_palette;
-        Serial.println("Mode 5: Solid Blue");
+        // Serial.println("Mode 5: Solid Blue");
         break;
       case 6:
         currentPalette = white_palette;
-        Serial.println("Mode 6: Solid White");
+        // Serial.println("Mode 6: Solid White");
+        break;
+      case 7:
+        currentPalette = warm_white_palette;
+        // Serial.println("Mode 7: Warm White");
         break;
     }
 
-    // Устанавливаем максимальную яркость на основе текущей палитры
-    FastLED.setBrightness(getMaxBrightness());
+    FastLED.setBrightness(getMaxBrightness()); // Устанавливаем максимальную яркость на основе текущей палитры
 
     FastLED.show();  // Применяем изменения яркости и палитры
   }
@@ -354,111 +347,111 @@ void FillLEDsFromPaletteColors(uint8_t colorIndex) {
 }
 
 void handleOperationSwitch() {
-  if (digitalRead(BUTTON_PIN_FOR_MODE) == LOW && (millis() - lastButtonPressForModeTime) > DEBOUNCE_DELAY) {
+  if (digitalRead(MODE_BUTTON_PIN) == LOW && (millis() - lastButtonPressForModeTime) > DEBOUNCE_DELAY) {
     lastButtonPressForModeTime = millis();
     currentOperation = (currentOperation + 1) % 3;  // Переключаем между режимами работы
     switch (currentOperation) {
       case 0:
         bottomToTop = true;
         currentState = TURNING_OFF;
-        Serial.println("currentOperation 0: Handle Motion Detection");
+        // Serial.println("currentOperation 0: Handle Motion Detection");
         break;
       case 1:
         FastLED.clear();
         currentState = ANIMATING;
         FastLED.show();
-        Serial.println("currentOperation 1: Handle Motion Color Palette");
+        // Serial.println("currentOperation 1: Handle Motion Color Palette");
         break;
       case 2:
         FastLED.clear();
         FastLED.setBrightness(getMaxBrightness());  // Используем функцию для получения максимальной яркости
         FastLED.show();
-        Serial.println("currentOperation 2: Only Color Palette");
+        // Serial.println("currentOperation 2: Only Color Palette");
         break;
     }
   }
 }
 
-void animateStairsToTop() {
-  for (int step = 0; step < NUM_STEPS; step++) {
-    // Определяем коэффициент для colorIndex в зависимости от текущей палитры
-    int colorIndexFactor = 30;  // Значение по умолчанию
-    if (currentPalette == RainbowColors_p) {
-      colorIndexFactor = 595;
-    } else if (currentPalette == RainbowStripeColors_p) {
-      colorIndexFactor = 186;
-    } else if (currentPalette == CloudColors_p) {
-      colorIndexFactor = 175;
-    } else if (currentPalette == PartyColors_p) {
-      colorIndexFactor = 116;
-    } else if (currentPalette == OceanColors_p) {
-      colorIndexFactor = 105;
-    }
+void animateStairsOn(bool bottomToTop) {
+  if (bottomToTop) {
+    for (int step = 0; step < NUM_STEPS; step++) {
+      // Определяем коэффициент для colorIndex в зависимости от текущей палитры
+      int colorIndexFactor = 30;  // Значение по умолчанию
+      if (currentPalette == RainbowColors_p) {
+        colorIndexFactor = 595;
+      } else if (currentPalette == RainbowStripeColors_p) {
+        colorIndexFactor = 186;
+      } else if (currentPalette == CloudColors_p) {
+        colorIndexFactor = 175;
+      } else if (currentPalette == PartyColors_p) {
+        colorIndexFactor = 116;
+      } else if (currentPalette == OceanColors_p) {
+        colorIndexFactor = 105;
+      }
 
-    // Анимация по ступеням
-    for (int fadeStep = 0; fadeStep < FADE_IN_STEPS_ON; fadeStep++) {
+      // Анимация по ступеням
+      for (int fadeStep = 0; fadeStep < FADE_IN_STEPS_ON; fadeStep++) {
+        for (int i = 0; i < LEDS_PER_STEP; i++) {
+          int ledIndex = step * LEDS_PER_STEP + i;
+          if (ledState[ledIndex] == OFF) { 
+            // Рассчитываем colorIndex на основе коэффициента
+            uint8_t colorIndex = startIndex + ledIndex * (595 / colorIndexFactor);
+
+            // Задаём цвет и плавное увеличение яркости
+            FillLEDsForAmimate(colorIndex, ledIndex);
+            leds[ledIndex].nscale8((fadeStep * 255) / FADE_IN_STEPS_ON);
+          }
+        }
+        FastLED.show();
+        delay(FADE_DELAY_ON); 
+      }
+
+      // Устанавливаем состояние светодиодов как "Включено"
       for (int i = 0; i < LEDS_PER_STEP; i++) {
         int ledIndex = step * LEDS_PER_STEP + i;
-        if (ledState[ledIndex] == OFF) { 
-          // Рассчитываем colorIndex на основе коэффициента
-          uint8_t colorIndex = startIndex + ledIndex * (595 / colorIndexFactor);
-
-          // Задаём цвет и плавное увеличение яркости
-          FillLEDsForAmimate(colorIndex, ledIndex);
-          leds[ledIndex].nscale8((fadeStep * 255) / FADE_IN_STEPS_ON);
-        }
+        ledState[ledIndex] = ON;
       }
       FastLED.show();
-      delay(FADE_DELAY_ON); 
     }
+  } else {
+    for (int step = NUM_STEPS - 1; step >= 0; step--) {
+      // Определяем коэффициент для colorIndex в зависимости от текущей палитры
+      int colorIndexFactor = 30;  // Значение по умолчанию
+      if (currentPalette == RainbowColors_p) {
+        colorIndexFactor = 595;
+      } else if (currentPalette == RainbowStripeColors_p) {
+        colorIndexFactor = 186;
+      } else if (currentPalette == CloudColors_p) {
+        colorIndexFactor = 175;
+      } else if (currentPalette == PartyColors_p) {
+        colorIndexFactor = 116;
+      } else if (currentPalette == OceanColors_p) {
+        colorIndexFactor = 105;
+      }
 
-    // Устанавливаем состояние светодиодов как "Включено"
-    for (int i = 0; i < LEDS_PER_STEP; i++) {
-      int ledIndex = step * LEDS_PER_STEP + i;
-      ledState[ledIndex] = ON;
+      for (int fadeStep = 0; fadeStep < FADE_IN_STEPS_ON; fadeStep++) {
+        for (int i = 0; i < LEDS_PER_STEP; i++) {
+          int ledIndex = step * LEDS_PER_STEP + i;
+          if (ledState[ledIndex] == OFF) { 
+            // Задаём цвет в зависимости от текущего режима
+            uint8_t colorIndex = startIndex + ledIndex * (595 / colorIndexFactor); // Расчет цвета на основе индекса светодиода
+            FillLEDsForAmimate(colorIndex, ledIndex);  // Заполняем светодиоды цветом 
+            // Плавное увеличение яркости
+            leds[ledIndex].nscale8((fadeStep * 255) / FADE_IN_STEPS_ON);
+          }
+        }
+        FastLED.show();
+        delay(FADE_DELAY_ON); 
+      }
+
+      for (int i = 0; i < LEDS_PER_STEP; i++) {
+        int ledIndex = step * LEDS_PER_STEP + i;
+        ledState[ledIndex] = ON;
+      }
+      FastLED.show();
     }
-    FastLED.show();
   }
 }
-
-void animateStairsToBottom() {
-  for (int step = NUM_STEPS - 1; step >= 0; step--) {
-    // Определяем коэффициент для colorIndex в зависимости от текущей палитры
-    int colorIndexFactor = 30;  // Значение по умолчанию
-    if (currentPalette == RainbowColors_p) {
-      colorIndexFactor = 595;
-    } else if (currentPalette == RainbowStripeColors_p) {
-      colorIndexFactor = 186;
-    } else if (currentPalette == CloudColors_p) {
-      colorIndexFactor = 175;
-    } else if (currentPalette == PartyColors_p) {
-      colorIndexFactor = 116;
-    } else if (currentPalette == OceanColors_p) {
-      colorIndexFactor = 105;
-    }
-
-    for (int fadeStep = 0; fadeStep < FADE_IN_STEPS_ON; fadeStep++) {
-      for (int i = 0; i < LEDS_PER_STEP; i++) {
-        int ledIndex = step * LEDS_PER_STEP + i;
-        if (ledState[ledIndex] == OFF) { 
-          // Задаём цвет в зависимости от текущего режима
-          uint8_t colorIndex = startIndex + ledIndex * (595 / colorIndexFactor); // Расчет цвета на основе индекса светодиода
-          FillLEDsForAmimate(colorIndex, ledIndex);  // Заполняем светодиоды цветом 
-          // Плавное увеличение яркости
-          leds[ledIndex].nscale8((fadeStep * 255) / FADE_IN_STEPS_ON);
-        }
-      }
-      FastLED.show();
-      delay(FADE_DELAY_ON); 
-    }
-
-    for (int i = 0; i < LEDS_PER_STEP; i++) {
-      int ledIndex = step * LEDS_PER_STEP + i;
-      ledState[ledIndex] = ON;
-    }
-    FastLED.show();
-  }
-} 
 
 void animateStairsOff(bool bottomToTop) {
   if (bottomToTop) {
